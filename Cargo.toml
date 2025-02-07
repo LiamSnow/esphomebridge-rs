@@ -1,0 +1,14 @@
+[package]
+name = "iron-esphome"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = "0.22.1"
+bytes = "1.9.0"
+memchr = "2.7.4"
+prost = "0.13.4"
+snow = "0.9.6"
+
+[build-dependencies]
+prost-build = "0.13.4"
