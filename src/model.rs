@@ -1,5 +1,68 @@
+use crate::api;
+use strum_macros::FromRepr;
+use thiserror::Error;
+
+#[derive(FromRepr, Debug, PartialEq, Clone)]
+#[repr(i32)]
+pub enum UserServiceArgType {
+    Bool = 0,
+    Int = 1,
+    Float = 2,
+    String = 3,
+    BoolArray = 4,
+    IntArray = 5,
+    FloatArray = 6,
+    StringArray = 7,
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum UserServiceParseError {
+    #[error("unknown arg type `{0}`")]
+    UnknownArgType(i32),
+}
 
 #[derive(Debug, Clone)]
+pub struct UserServiceArg {
+    pub name: String,
+    pub typ: UserServiceArgType
+}
+
+impl TryFrom<api::ListEntitiesServicesArgument> for UserServiceArg {
+    type Error = UserServiceParseError;
+
+    fn try_from(value: api::ListEntitiesServicesArgument) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            typ: UserServiceArgType::from_repr(value.r#type).ok_or(UserServiceParseError::UnknownArgType(value.r#type))?
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserService {
+    pub name: String,
+    pub key: u32,
+    pub args: Vec<UserServiceArg>
+}
+
+impl TryFrom<api::ListEntitiesServicesResponse> for UserService {
+    type Error = UserServiceParseError;
+
+    fn try_from(value: api::ListEntitiesServicesResponse) -> Result<Self, Self::Error> {
+        let mut args: Vec<UserServiceArg> = Vec::new();
+        for arg in value.args {
+            args.push(arg.try_into()?);
+        }
+        Ok(Self {
+            name: value.name,
+            key: value.key,
+            args
+        })
+    }
+}
+
+#[derive(FromRepr, Debug, PartialEq, Clone)]
+#[repr(u16)]
 pub enum MessageType {
     HelloRequest = 1,
     HelloResponse = 2,

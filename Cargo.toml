@@ -7,8 +7,13 @@ edition = "2021"
 base64 = "0.22.1"
 bytes = "1.9.0"
 memchr = "2.7.4"
+paste = "1.0.15"
 prost = "0.13.4"
 snow = "0.9.6"
+strum = "0.27"
+strum_macros = "0.27"
+thiserror = "2.0.11"
+tokio = { version = "1.43.0", features = ["bytes", "full"] }
 
 [build-dependencies]
 prost-build = "0.13.4"

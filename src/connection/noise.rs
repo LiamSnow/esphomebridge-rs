@@ -1,14 +1,18 @@
 use base64::prelude::*;
-use bytes::{BytesMut, Buf};
-use snow::{HandshakeState, TransportState};
-use std::{error::Error, io::{Read, Write}, net::TcpStream, time::Duration};
+use bytes::{Buf, BytesMut};
 use memchr::memchr;
-
-use crate::core::MessageType;
-
+use snow::{HandshakeState, TransportState};
+use std::{
+    error::Error,
+    io::{Read, Write},
+    net::TcpStream,
+    time::Duration,
+};
+use crate::model::MessageType;
 use super::base::Connection;
 
 pub const NOISE_HELLO: &[u8; 3] = b"\x01\x00\x00";
+pub const READ_TIMEOUT: Option<Duration> = Some(Duration::from_secs(60));
 
 pub struct NoiseConnection {
     stream: TcpStream,
@@ -20,20 +24,24 @@ impl NoiseConnection {
     pub fn new(ip: &str, noise_psk: String) -> Result<Self, Box<dyn Error>> {
         let mut noise_handshake = Self::setup_noise(noise_psk)?;
 
+        //TODO TCPListener?
         let mut stream = TcpStream::connect(ip)?;
-        stream.set_read_timeout(Some(Duration::from_secs(60)))?;
+        stream.set_read_timeout(READ_TIMEOUT)?;
 
         Self::send_hello(&mut stream, &mut noise_handshake)?;
         let server_name = Self::receive_hello(&mut stream)?;
         let noise = Self::receive_handshake(&mut stream, noise_handshake)?;
 
-        Ok(Self { stream, noise, server_name })
+        Ok(Self {
+            stream,
+            noise,
+            server_name,
+        })
     }
 
     fn setup_noise(noise_psk: String) -> Result<HandshakeState, Box<dyn Error>> {
         let key_vec = BASE64_STANDARD.decode(&noise_psk)?;
         let key: [u8; 32] = key_vec.try_into().map_err(|_| "Invalid key length")?;
-
 
         let params = "Noise_NNpsk0_25519_ChaChaPoly_SHA256".parse()?;
         let handshake = snow::Builder::new(params)
@@ -45,7 +53,10 @@ impl NoiseConnection {
     }
 
     /// Send ClientHello to the server
-    fn send_hello(stream: &mut TcpStream, noise_handshake: &mut HandshakeState) -> Result<(), Box<dyn Error>> {
+    fn send_hello(
+        stream: &mut TcpStream,
+        noise_handshake: &mut HandshakeState,
+    ) -> Result<(), Box<dyn Error>> {
         let mut frame = BytesMut::with_capacity(65535);
         frame.resize(65535, 0);
         let mut frame_len = noise_handshake.write_message(&[], &mut frame)?;
@@ -77,11 +88,14 @@ impl NoiseConnection {
         }
 
         let pos = memchr(0, &frame[1..]).ok_or("No null terminator")?;
-        let server_name = String::from_utf8_lossy(&frame[1..pos+1]).into_owned();
+        let server_name = String::from_utf8_lossy(&frame[1..pos + 1]).into_owned();
         Ok(server_name)
     }
 
-    fn receive_handshake(stream: &mut TcpStream, mut noise_handshake: HandshakeState) -> Result<TransportState, Box<dyn Error>> {
+    fn receive_handshake(
+        stream: &mut TcpStream,
+        mut noise_handshake: HandshakeState,
+    ) -> Result<TransportState, Box<dyn Error>> {
         let frame = Self::read_frame(stream)?;
 
         let preamble = frame[0];
@@ -115,7 +129,11 @@ impl NoiseConnection {
 }
 
 impl Connection for NoiseConnection {
-    fn send_message(&mut self, req: impl prost::Message, msg_type: MessageType) -> Result<(), Box<dyn Error>> {
+    fn send_message(
+        &mut self,
+        req: impl prost::Message,
+        msg_type: MessageType,
+    ) -> Result<(), Box<dyn Error>> {
         //convert protoc message to bytes
         let data_len = req.encoded_len();
         let mut data = BytesMut::with_capacity(data_len);
@@ -156,23 +174,48 @@ impl Connection for NoiseConnection {
         Ok(())
     }
 
-    fn receive_message<T: prost::Message + Default>(&mut self, expected_msg_type: MessageType) -> Result<T, Box<dyn Error>> {
+    fn receive_message_raw(&mut self) -> Result<(MessageType, BytesMut), Box<dyn Error>> {
         let frame = Self::read_frame(&mut self.stream)?;
         let mut msg = BytesMut::with_capacity(65535);
         msg.resize(65535, 0);
         let msg_size = self.noise.read_message(&frame, &mut msg)?;
         msg.truncate(msg_size);
+        let msg_type = MessageType::from_repr(u16::from_be_bytes([msg[0], msg[1]]))
+            .ok_or("unknown message type")?;
+        msg.advance(4);
+        Ok((msg_type, msg))
+    }
 
-        let msg_type = u16::from_be_bytes([msg[0], msg[1]]);
-        if msg_type != expected_msg_type as u16 {
-            return Err(format!("Wrong message type: got {}", msg_type).into());
+    fn receive_message<T: prost::Message + Default>(
+        &mut self,
+        expected_msg_type: MessageType,
+    ) -> Result<T, Box<dyn Error>> {
+        let (msg_type, mut msg) = self.receive_message_raw()?;
+        if msg_type != expected_msg_type {
+            return Err(format!("Wrong message type: got {:#?}", msg_type).into());
         }
-        msg.advance(3);
-
         Ok(T::decode(&mut msg)?)
     }
 
-    fn close(&mut self) {
+    fn transaction<T: prost::Message + Default>(
+        &mut self,
+        req: impl prost::Message,
+        req_type: MessageType,
+        res_type: MessageType,
+    ) -> Result<T, Box<dyn Error>> {
+        self.send_message(req, req_type)?;
+        Ok(self.receive_message(res_type)?)
+    }
+
+    fn buffer_empty(&mut self) -> Result<bool, Box<dyn Error>> {
+        self.stream.set_read_timeout(Some(Duration::from_millis(10)))?; //FIXME
+        let mut buf = [0; 1];
+        let res = self.stream.peek(&mut buf).is_err();
+        self.stream.set_read_timeout(READ_TIMEOUT)?;
+        Ok(res)
+    }
+
+    fn disconnect(&mut self) {
         //TODO close TCP
     }
 }

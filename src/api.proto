@@ -216,7 +216,7 @@ message DeviceInfoResponse {
   uint32 legacy_bluetooth_proxy_version = 11;
   uint32 bluetooth_proxy_feature_flags = 15;
 
-  string manufacturer = 12;
+  // string manufacturer = 12;
 
   string friendly_name = 13;
 
