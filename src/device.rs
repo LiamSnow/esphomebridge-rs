@@ -17,7 +17,7 @@ pub struct Device<T: Connection> {
 }
 
 impl<T: Connection> Device<T> {
-    pub fn new(conn: T) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(conn: T) -> Result<Self, Box<dyn Error>> {
         let mut me = Device {
             conn,
             entities: Entities::default(),
@@ -31,94 +31,95 @@ impl<T: Connection> Device<T> {
             },
             MessageType::HelloRequest,
             MessageType::HelloResponse,
-        )?;
+        ).await?;
         let res = me.conn.transaction::<api::ConnectResponse>(
             api::ConnectRequest {
                 password: "".to_string(),
             },
             MessageType::ConnectRequest,
             MessageType::ConnectResponse,
-        );
+        ).await;
         if let Ok(msg) = res {
             if msg.invalid_password {
                 return Err("Invalid password".into());
             }
         }
-        me.fetch_entities_and_services()?;
-        me.subscribe_states()?;
+        me.fetch_entities_and_services().await?;
+        me.subscribe_states().await?;
         Ok(me)
     }
 
-    pub fn ping(&mut self) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn ping(&mut self) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
         let _: api::PingResponse = self.conn.transaction(
             api::PingRequest {},
             MessageType::PingRequest,
             MessageType::PingResponse,
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn disconnect(&mut self) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn disconnect(&mut self) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
         let _: api::DisconnectResponse = self.conn.transaction(
             api::DisconnectRequest {},
             MessageType::DisconnectRequest,
             MessageType::DisconnectResponse,
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn device_info(&mut self) -> Result<api::DeviceInfoResponse, Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn device_info(&mut self) -> Result<api::DeviceInfoResponse, Box<dyn Error>> {
+        self.process_incoming().await?;
         let res: api::DeviceInfoResponse = self.conn.transaction(
             api::DeviceInfoRequest {},
             MessageType::DeviceInfoRequest,
             MessageType::DeviceInfoResponse,
-        )?;
+        ).await?;
         Ok(res)
     }
 
-    pub fn subscribe_states(&mut self) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn subscribe_states(&mut self) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
         self.conn.send_message(
             api::SubscribeStatesRequest {},
             MessageType::SubscribeStatesRequest,
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn subscribe_logs(&mut self, level: i32, dump_config: bool) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn subscribe_logs(&mut self, level: i32, dump_config: bool) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
         self.conn.send_message(
             api::SubscribeLogsRequest { level, dump_config },
             MessageType::SubscribeLogsRequest,
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn light_command(&mut self, req: api::LightCommandRequest) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
+    pub async fn light_command(&mut self, req: api::LightCommandRequest) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
         self.conn
-            .send_message(req, MessageType::LightCommandRequest)?;
+            .send_message(req, MessageType::LightCommandRequest).await?;
         Ok(())
     }
 
-    pub fn process_incoming(&mut self) -> Result<(), Box<dyn Error>> {
-        while !self.conn.buffer_empty()? {
-            let (msg_type, msg) = self.conn.receive_message_raw()?;
+    pub async fn process_incoming(&mut self) -> Result<(), Box<dyn Error>> {
+        while !self.conn.buffer_empty().await {
+            let (msg_type, msg) = self.conn.receive_message_raw().await?;
 
             match msg_type {
                 MessageType::DisconnectRequest => {
                     self.conn.send_message(
                         api::DisconnectResponse {},
                         MessageType::DisconnectResponse,
-                    )?;
-                    self.conn.disconnect();
+                    ).await?;
+                    self.conn.disconnect().await?;
+                    return Err("device requested shutdown".into());
                 }
                 MessageType::PingRequest => {
                     self.conn
-                        .send_message(api::PingResponse {}, MessageType::PingResponse)?;
+                        .send_message(api::PingResponse {}, MessageType::PingResponse).await?;
                 }
                 MessageType::GetTimeRequest => {
                     self.conn.send_message(
@@ -129,7 +130,7 @@ impl<T: Connection> Device<T> {
                                 .try_into()?,
                         },
                         MessageType::GetTimeResponse,
-                    )?;
+                    ).await?;
                 }
                 _ => {
                     if !self.process_state_update(&msg_type, msg)? {
@@ -141,11 +142,11 @@ impl<T: Connection> Device<T> {
         Ok(())
     }
 
-    pub fn fetch_entities_and_services(&mut self) -> Result<(), Box<dyn Error>> {
-        self.process_incoming()?;
-        self.conn.send_message(api::ListEntitiesRequest {}, MessageType::ListEntitiesRequest)?;
+    pub async fn fetch_entities_and_services(&mut self) -> Result<(), Box<dyn Error>> {
+        self.process_incoming().await?;
+        self.conn.send_message(api::ListEntitiesRequest {}, MessageType::ListEntitiesRequest).await?;
         loop {
-            let (msg_type, msg) = self.conn.receive_message_raw()?;
+            let (msg_type, msg) = self.conn.receive_message_raw().await?;
 
             match msg_type {
                 MessageType::ListEntitiesServicesResponse => {
