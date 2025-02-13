@@ -1,8 +1,21 @@
 use crate::api;
-use strum_macros::FromRepr;
+use strum_macros::{Display, FromRepr};
 use thiserror::Error;
 
-#[derive(FromRepr, Debug, PartialEq, Clone)]
+#[derive(FromRepr, Display, Debug, PartialEq, Clone)]
+#[repr(i32)]
+pub enum LogLevel {
+    None = 0,
+    Error = 1,
+    Warn = 2,
+    Info = 3,
+    Config = 4,
+    Debug = 5,
+    Verbose = 6,
+    VeryVerbose = 7,
+}
+
+#[derive(FromRepr, Display, Debug, PartialEq, Clone)]
 #[repr(i32)]
 pub enum UserServiceArgType {
     Bool = 0,
@@ -61,7 +74,7 @@ impl TryFrom<api::ListEntitiesServicesResponse> for UserService {
     }
 }
 
-#[derive(FromRepr, Debug, PartialEq, Clone)]
+#[derive(FromRepr, Display, Debug, PartialEq, Clone)]
 #[repr(u16)]
 pub enum MessageType {
     HelloRequest = 1,
@@ -188,3 +201,5 @@ pub enum MessageType {
     VoiceAssistantConfigurationResponse = 122,
     VoiceAssistantSetConfiguration = 123,
 }
+
+

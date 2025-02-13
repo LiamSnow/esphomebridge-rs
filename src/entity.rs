@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
+use crate::device::DeviceError;
 use crate::api;
-use strum_macros::FromRepr;
+use strum_macros::{Display, FromRepr};
 use paste::paste;
 use crate::connection::base::Connection;
-use std::error::Error;
 use prost::Message;
 use bytes::BytesMut;
 use crate::model::MessageType;
 use crate::Device;
 
-#[derive(FromRepr, Debug, PartialEq, Clone)]
+#[derive(FromRepr, Display, Debug, PartialEq, Clone)]
 #[repr(i32)]
 pub enum EntityCategory {
     None = 0,
@@ -29,6 +29,7 @@ pub struct EntityInfo {
     pub category: EntityCategory,
 }
 
+//TODO doc comments
 macro_rules! gen_entities {
     (
         stateful {
@@ -63,7 +64,7 @@ macro_rules! gen_entities {
             )*
 
             impl<T: Connection> Device<T> {
-                pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), Box<dyn Error>> {
+                pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), DeviceError> {
                     match msg_type {
                         $(
                             MessageType::[<ListEntities $stateful Response>] => {
@@ -78,7 +79,8 @@ macro_rules! gen_entities {
                                             unique_id: res.unique_id,
                                             disabled_by_default: res.disabled_by_default,
                                             icon: res.icon,
-                                            category: EntityCategory::from_repr(res.entity_category).ok_or("unknown entity category")?,
+                                            category: EntityCategory::from_repr(res.entity_category)
+                                                .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
                                         },
                                         state: None
                                     }
@@ -98,25 +100,27 @@ macro_rules! gen_entities {
                                             unique_id: res.unique_id,
                                             disabled_by_default: res.disabled_by_default,
                                             icon: res.icon,
-                                            category: EntityCategory::from_repr(res.entity_category).ok_or("unknown entity category")?,
+                                            category: EntityCategory::from_repr(res.entity_category)
+                                                .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
                                         }
                                     }
                                 );
                             },
                         )*
                         _ => {
-                            return Err("Unknown ListEntities response!".into());
+                            return Err(DeviceError::UnknownListEntitiesResponse(msg_type));
                         }
                     }
                     Ok(())
                 }
 
-                pub(crate) fn process_state_update(&mut self, msg_type: &MessageType, msg: BytesMut) -> Result<bool, Box<dyn Error>> {
+                pub(crate) fn process_state_update(&mut self, msg_type: &MessageType, msg: BytesMut) -> Result<bool, DeviceError> {
                     match msg_type {
                         $(
                             MessageType::[<$stateful StateResponse>] => {
                                 let state = api::[<$stateful StateResponse>]::decode(msg)?;
-                                let entity = self.entities.[<$stateful:snake s>].get_mut(&state.key).ok_or("state update for unknown entity!")?;
+                                let entity = self.entities.[<$stateful:snake s>].get_mut(&state.key)
+                                    .ok_or(DeviceError::StateUpdateForUnknownEntity(state.key))?;
                                 entity.state = Some(state);
                                 Ok(true)
                             }

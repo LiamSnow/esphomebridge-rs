@@ -1,4 +1,3 @@
-// use std::{io::{self, Read}, net::TcpStream};
 
 // trait ReadVarint32: Read {
 //     fn read_varint32(&mut self) -> io::Result<u32>;
@@ -29,3 +28,27 @@
 //         Ok(result)
 //     }
 // }
+
+use std::{sync::Arc, task::{Context, Poll, Wake, Waker}};
+
+use tokio::net::TcpStream;
+
+
+struct NoopWaker;
+impl Wake for NoopWaker {
+    fn wake(self: Arc<Self>) { }
+    fn wake_by_ref(self: &Arc<Self>) { }
+}
+
+
+pub trait BufferEmpty {
+    async fn buffer_empty(&mut self) -> bool;
+}
+
+impl BufferEmpty for TcpStream {
+    async fn buffer_empty(&mut self) -> bool {
+        let waker = Waker::from(Arc::new(NoopWaker));
+        let mut cx = Context::from_waker(&waker);
+        return matches!(self.poll_read_ready(&mut cx), Poll::Ready(Ok(())))
+    }
+}
