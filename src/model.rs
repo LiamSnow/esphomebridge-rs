@@ -1,4 +1,5 @@
 use crate::api;
+use bytes::Bytes;
 use strum_macros::{Display, FromRepr};
 use thiserror::Error;
 
@@ -13,6 +14,12 @@ pub enum LogLevel {
     Debug = 5,
     Verbose = 6,
     VeryVerbose = 7,
+}
+
+pub struct Log {
+    pub level: LogLevel,
+    pub message: Bytes,
+    pub send_failed: bool,
 }
 
 #[derive(FromRepr, Display, Debug, PartialEq, Clone)]

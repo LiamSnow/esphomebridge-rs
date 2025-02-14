@@ -1,88 +1,46 @@
 use bytes::BytesMut;
 use prost::Message;
-use thiserror::Error;
 use std::{
     collections::HashMap, time::{SystemTime, UNIX_EPOCH}
 };
 
 use crate::{
-    api, connection::{base::{Connection, ConnectionError}, noise::NoiseConnection}, entity::Entities, model::{MessageType, UserService, UserServiceParseError}
+    api, connection::{base::Connection, noise::NoiseConnection, plain::PlainConnection}, entity::Entities, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
 pub struct Device<T: Connection> {
     pub(crate) conn: T,
+    password: String,
     pub connected: bool,
     pub entities: Entities,
     pub services: HashMap<u32, UserService>,
+    pub logs: Vec<Log>
 }
 
 impl Device<NoiseConnection> {
     /// helper function to create a NoiseConnection and Device
-    pub async fn new_noise(ip: String, noise_psk: String) -> Result<Self, DeviceError> {
-        let conn = NoiseConnection::new(ip, noise_psk).await?;
-        Self::new(conn).await
+    pub fn new_noise(ip: String, noise_psk: String) -> Self {
+        Self::new(NoiseConnection::new(ip, noise_psk), None)
     }
 }
 
-#[derive(Error, Debug)]
-pub enum DeviceError {
-    #[error("not connected")]
-    NotConnected,
-    #[error("device requested shutdown")]
-    DeviceRequestShutdown,
-    #[error("invalid password")]
-    InvalidPassword,
-    #[error("connection error `{0}`")]
-    ConnectionError(ConnectionError),
-    #[error("frame had wrong preamble `{0}`")]
-    FrameHadWrongPreamble(u8),
-    #[error("system time error `{0}`")]
-    SystemTimeError(std::time::SystemTimeError),
-    #[error("system time error `{0}`")]
-    SystemTimeIntCastError(std::num::TryFromIntError),
-    #[error("prost decode error `{0}`")]
-    ProstDecodeError(prost::DecodeError),
-    #[error("prost encode error `{0}`")]
-    ProstEncodeError(prost::EncodeError),
-    #[error("user service parse error `{0}`")]
-    UserServiceParseError(UserServiceParseError),
-    #[error("state update for unknown entity `{0}`")]
-    StateUpdateForUnknownEntity(u32),
-    #[error("unknown list entities reponse `{0}`")]
-    UnknownListEntitiesResponse(MessageType),
-    #[error("unknown entity category `{0}`")]
-    UnknownEntityCategory(i32),
-    #[error("wrong message type `{0}`")]
-    WrongMessageType(MessageType),
-}
-
-impl From<ConnectionError> for DeviceError {
-    fn from(value: ConnectionError) -> Self {
-        Self::ConnectionError(value)
-    }
-}
-
-impl From<prost::DecodeError> for DeviceError {
-    fn from(value: prost::DecodeError) -> Self {
-        Self::ProstDecodeError(value)
-    }
-}
-
-impl From<prost::EncodeError> for DeviceError {
-    fn from(value: prost::EncodeError) -> Self {
-        Self::ProstEncodeError(value)
+impl Device<PlainConnection> {
+    /// helper function to create a PlainConnection and Device
+    pub fn new_plain(ip: String, password: String) -> Self {
+        Self::new(PlainConnection::new(ip), Some(password))
     }
 }
 
 impl<T: Connection> Device<T> {
-    pub async fn new(conn: T) -> Result<Self, DeviceError> {
-        let me = Device {
+    pub fn new(conn: T, password: Option<String>) -> Self {
+        Device {
             conn,
+            password: password.unwrap_or("".to_string()),
             connected: false,
             entities: Entities::default(),
             services: HashMap::new(),
-        };
-        Ok(me)
+            logs: Vec::new()
+        }
     }
 
     pub async fn connect(&mut self) -> Result<(), DeviceError> {
@@ -103,7 +61,7 @@ impl<T: Connection> Device<T> {
         let res = self.transaction::<api::ConnectResponse>(
             MessageType::ConnectRequest,
             &api::ConnectRequest {
-                password: "".to_string(),
+                password: self.password.clone(),
             },
             MessageType::ConnectResponse,
         ).await;
@@ -167,12 +125,24 @@ impl<T: Connection> Device<T> {
         Ok(())
     }
 
-    pub async fn light_command(&mut self, req: api::LightCommandRequest) -> Result<(), DeviceError> {
+
+    pub async fn execute_service(&mut self, req: &api::ExecuteServiceRequest) -> Result<(), DeviceError> {
         self.process_incoming().await?;
-        self.send(MessageType::LightCommandRequest, &req).await?;
+        self.send(MessageType::ExecuteServiceRequest, req).await?;
         Ok(())
     }
 
+    pub async fn get_camera_image(&mut self, req: &api::CameraImageRequest) -> Result<api::CameraImageResponse, DeviceError> {
+        self.process_incoming().await?;
+        let res: api::CameraImageResponse = self.transaction(
+            MessageType::CameraImageRequest,
+            req,
+            MessageType::CameraImageResponse,
+        ).await?;
+        Ok(res)
+    }
+
+    ///WARNING: Call process_incoming first
     pub async fn send(&mut self, msg_type: MessageType, msg: &impl prost::Message) -> Result<(), DeviceError> {
         let msg_len = msg.encoded_len();
         let mut bytes = BytesMut::with_capacity(msg_len);
@@ -182,6 +152,7 @@ impl<T: Connection> Device<T> {
         Ok(())
     }
 
+    ///WARNING: Call process_incoming first
     pub async fn recieve<U: prost::Message + Default>(&mut self, expected_msg_type: MessageType) -> Result<U, DeviceError> {
         let (msg_type, mut msg) = self.conn.receive_message().await?;
         if msg_type != expected_msg_type {
@@ -190,6 +161,7 @@ impl<T: Connection> Device<T> {
         Ok(U::decode(&mut msg)?)
     }
 
+    ///WARNING: Call process_incoming first
     pub async fn transaction<U: prost::Message + Default>(
         &mut self,
         req_type: MessageType,
@@ -229,7 +201,12 @@ impl<T: Connection> Device<T> {
                     ).await?;
                 }
                 MessageType::SubscribeLogsResponse => {
-                    //TODO
+                    let log = api::SubscribeLogsResponse::decode(msg)?;
+                    self.logs.push(Log {
+                        level: LogLevel::from_repr(log.level).ok_or(DeviceError::UnknownLogLevel(log.level))?,
+                        message: log.message.into(),
+                        send_failed: log.send_failed,
+                    });
                 }
                 _ => {
                     if !self.process_state_update(&msg_type, msg)? {
@@ -260,4 +237,26 @@ impl<T: Connection> Device<T> {
             }
         }
     }
+}
+
+//TODO doc comments
+macro_rules! get_commands {
+    ($($command:ident),*) => { paste::paste! {
+        impl<T: Connection> Device<T> {
+            $(
+                pub async fn [<$command:snake _command>](&mut self, req: &api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
+                    self.process_incoming().await?;
+                    self.send(MessageType::[<$command CommandRequest>], req).await?;
+                    Ok(())
+                }
+            )*
+        }
+    }}
+}
+
+get_commands! {
+    Light, Cover, Fan, Switch, Climate,
+    Number, Siren, Lock, Button, MediaPlayer,
+    AlarmControlPanel, Text, Date, Time, DateTime,
+    Valve, Update
 }

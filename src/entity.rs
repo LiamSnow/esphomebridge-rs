@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::device::DeviceError;
+use crate::error::DeviceError;
 use crate::api;
 use strum_macros::{Display, FromRepr};
 use paste::paste;
@@ -8,7 +8,7 @@ use crate::connection::base::Connection;
 use prost::Message;
 use bytes::BytesMut;
 use crate::model::MessageType;
-use crate::Device;
+use crate::device::Device;
 
 #[derive(FromRepr, Display, Debug, PartialEq, Clone)]
 #[repr(i32)]

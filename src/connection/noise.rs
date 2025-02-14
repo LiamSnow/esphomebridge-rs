@@ -4,8 +4,8 @@ use memchr::memchr;
 use snow::{HandshakeState, TransportState};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
 use std::time::Duration;
-use crate::model::MessageType;
-use super::base::{Connection, ConnectionError};
+use crate::{error::ConnectionError, model::MessageType};
+use super::base::Connection;
 use super::util::BufferEmpty;
 
 pub const NOISE_HELLO: &[u8; 3] = b"\x01\x00\x00";
@@ -112,14 +112,14 @@ impl Connection for NoiseConnection {
 }
 
 impl NoiseConnection {
-    pub async fn new(ip: String, noise_psk: String) -> Result<Self, ConnectionError> {
-        Ok(Self {
+    pub fn new(ip: String, noise_psk: String) -> Self {
+        Self {
             ip,
             noise_psk,
             stream: None,
             noise: None,
             server_name: None,
-        })
+        }
     }
 
     fn setup_noise(noise_psk: &str) -> Result<HandshakeState, ConnectionError> {

@@ -1,68 +1,81 @@
-// use std::{error::Error, io::Write, net::TcpStream, time::Duration};
-// use bytes::BytesMut;
-// use crate::api;
-//
-// use super::base::Connection;
+use bytes::{BytesMut, BufMut};
+use tokio::io::AsyncReadExt;
+use tokio::{net::TcpStream, io::AsyncWriteExt};
+use crate::{error::ConnectionError, model::MessageType};
+use super::base::Connection;
+use super::util::{varu32_to_bytes, BufferEmpty, Varu32};
 
-// pub struct PlainConnection {
-//     pub stream: TcpStream,
-// }
-//
-// impl PlainConnection {
-//     pub fn new(ip: &str) -> Result<Self, Box<dyn Error>> {
-//         let mut me = Self { stream: TcpStream::connect(ip)? };
-//         me.stream.set_read_timeout(Some(Duration::from_secs(60)));
-//         me.connect();
-//         Ok(me)
-//     }
-//
-//     fn connect(&mut self) -> Result<(), Box<dyn Error>> {
-//         let req = api::HelloRequest {
-//             client_info: "iron-esphome".to_string(),
-//             api_version_major: 1,
-//             api_version_minor: 10,
-//         };
-//
-//         println!("sending message...");
-//         self.send_message(req)?;
-//         println!("done");
-//
-//         let res: api::HelloResponse = self.receive_message()?;
-//         println!("got {:#?}", res);
-//
-//         Ok(())
-//     }
-// }
+///NOTE UNTESTED!!!!!!!!
+pub struct PlainConnection {
+    ip: String,
+    stream: Option<TcpStream>,
+}
 
-// impl Connection for PlainConnection {
-//     fn send_message(&mut self, req: impl prost::Message) -> Result<(), Box<dyn Error>> {
-//         let mut buf = BytesMut::with_capacity(req.encoded_len());
-//         req.encode(&mut buf)?;
-//
-//         self.stream.write_all(&buf)?;
-//         self.stream.flush()?;
-//
-//         Ok(())
-//     }
-//
-//     fn receive_message<T: prost::Message + Default>(&mut self) -> Result<T, Box<dyn Error>> {
-//         self.stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-//         // let len = self.stream.read_varint32()?;
-//         // let tp = self.stream.read_varint32()?;
-//         //
-//         // println!("len:{len}, tp:{tp}");
-//         //
-//         // // Read the message body
-//         // let mut buffer = vec![0u8; len as usize];
-//         // self.stream.read_exact(&mut buffer)?;
-//
-//         // Decode the message
-//         // let message = T::decode(&buffer[..])?;
-//         let message = T::decode(&self.stream)?;
-//         Ok(message)
-//     }
-//
-//     fn close(&mut self) {
-//         //TODO close TCP
-//     }
-// }
+impl Connection for PlainConnection {
+    async fn connect(&mut self) -> Result<(), ConnectionError> {
+        if self.stream.is_some() {
+            return Ok(()) //TODO: is this wanted behavior... should this error? should it reconnect?
+        }
+        let stream = TcpStream::connect(&self.ip).await?;
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> Result<(), ConnectionError> {
+        if let Some(stream) = &mut self.stream {
+            stream.shutdown().await?;
+        }
+        self.stream = None;
+        Ok(())
+    }
+
+    async fn send_message(&mut self, msg_type: MessageType, msg_bytes: &BytesMut) -> Result<(), ConnectionError> {
+        let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let msg_type_var = varu32_to_bytes(msg_type as u32);
+        let msg_len = msg_bytes.len();
+        let msg_len_var = varu32_to_bytes(msg_len as u32);
+
+        let mut packet = BytesMut::with_capacity(msg_len + 1 + msg_type_var.len() + msg_len_var.len());
+        packet.put_u8(0);
+        packet.extend_from_slice(&msg_type_var);
+        packet.extend_from_slice(&msg_len_var);
+        packet.extend_from_slice(&msg_bytes);
+
+        stream.write_all(&packet).await?;
+        stream.flush().await?;
+
+        Ok(())
+    }
+
+    async fn receive_message(&mut self) -> Result<(MessageType, BytesMut), ConnectionError> {
+        let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
+        let preamble = stream.read_varu32().await?;
+        if preamble != 0x00 {
+            return Err(ConnectionError::FrameHadWrongPreamble(preamble as u8))
+        }
+
+        let msg_len = stream.read_varu32().await? as usize;
+        let msg_type_num = stream.read_varu32().await? as u16;
+        let msg_type = MessageType::from_repr(msg_type_num)
+            .ok_or(ConnectionError::UnknownMessageType(msg_type_num))?;
+        let mut msg = BytesMut::with_capacity(msg_len);
+        stream.read_buf(&mut msg).await?;
+        Ok((msg_type, msg))
+    }
+
+    async fn buffer_empty(&mut self) -> bool {
+        if let Some(stream) = &mut self.stream {
+            return stream.buffer_empty().await
+        }
+        true
+    }
+}
+
+impl PlainConnection {
+    pub fn new(ip: String) -> Self {
+        Self { ip, stream: None }
+    }
+}
+
+
