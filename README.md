@@ -1,2 +1,2 @@
-# iron-esphome
+# ESPHome Bridge
 aioesphomeapi in rust!
