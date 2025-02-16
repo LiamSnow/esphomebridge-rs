@@ -17,7 +17,7 @@ dev.connect().await?;
 
 //turn the light on
 let req = api::LightCommandRequest {
-    key: device.entities.lights.iter().next().unwrap().1.info.key,
+    key: device.first_light_key(),
     has_state: true,
     state: true
     ...

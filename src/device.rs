@@ -172,6 +172,10 @@ impl<T: Connection> Device<T> {
         Ok(self.recieve(res_type).await?)
     }
 
+    pub fn first_light_key(&mut self) -> Option<u32> {
+        let first_light = self.entities.lights.iter().next()?;
+        Some(first_light.1.info.key)
+    }
 
     pub async fn process_incoming(&mut self) -> Result<(), DeviceError> {
         while !self.conn.buffer_empty().await {
