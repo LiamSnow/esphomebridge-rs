@@ -5,11 +5,11 @@ use std::{
 };
 
 use crate::{
-    api, connection::{base::Connection, noise::NoiseConnection, plain::PlainConnection}, entity::Entities, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
+    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::Entities, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
-pub struct Device<T: Connection> {
-    pub(crate) conn: T,
+pub struct Device {
+    pub(crate) conn: AnyConnection,
     password: String,
     pub connected: bool,
     pub entities: Entities,
@@ -17,22 +17,8 @@ pub struct Device<T: Connection> {
     pub logs: Vec<Log>
 }
 
-impl Device<NoiseConnection> {
-    /// helper function to create a NoiseConnection and Device
-    pub fn new_noise(ip: String, noise_psk: String) -> Self {
-        Self::new(NoiseConnection::new(ip, noise_psk), None)
-    }
-}
-
-impl Device<PlainConnection> {
-    /// helper function to create a PlainConnection and Device
-    pub fn new_plain(ip: String, password: String) -> Self {
-        Self::new(PlainConnection::new(ip), Some(password))
-    }
-}
-
-impl<T: Connection> Device<T> {
-    pub fn new(conn: T, password: Option<String>) -> Self {
+impl Device {
+    pub fn new(conn: AnyConnection, password: Option<String>) -> Self {
         Device {
             conn,
             password: password.unwrap_or("".to_string()),
@@ -41,6 +27,16 @@ impl<T: Connection> Device<T> {
             services: HashMap::new(),
             logs: Vec::new()
         }
+    }
+
+    /// helper function to create a NoiseConnection and Device
+    pub fn new_noise(ip: String, noise_psk: String) -> Self {
+        Self::new(NoiseConnection::new(ip, noise_psk).into(), None)
+    }
+
+    /// helper function to create a PlainConnection and Device
+    pub fn new_plain(ip: String, password: String) -> Self {
+        Self::new(PlainConnection::new(ip).into(), Some(password))
     }
 
     pub async fn connect(&mut self) -> Result<(), DeviceError> {
@@ -172,7 +168,7 @@ impl<T: Connection> Device<T> {
         Ok(self.recieve(res_type).await?)
     }
 
-    pub fn first_light_key(&mut self) -> Option<u32> {
+    pub fn first_light_key(&self) -> Option<u32> {
         let first_light = self.entities.lights.iter().next()?;
         Some(first_light.1.info.key)
     }
@@ -246,7 +242,7 @@ impl<T: Connection> Device<T> {
 //TODO doc comments
 macro_rules! get_commands {
     ($($command:ident),*) => { paste::paste! {
-        impl<T: Connection> Device<T> {
+        impl Device {
             $(
                 pub async fn [<$command:snake _command>](&mut self, req: &api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
                     self.process_incoming().await?;

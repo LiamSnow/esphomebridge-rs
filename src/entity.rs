@@ -4,7 +4,6 @@ use crate::error::DeviceError;
 use crate::api;
 use strum_macros::{Display, FromRepr};
 use paste::paste;
-use crate::connection::base::Connection;
 use prost::Message;
 use bytes::BytesMut;
 use crate::model::MessageType;
@@ -63,7 +62,7 @@ macro_rules! gen_entities {
                 }
             )*
 
-            impl<T: Connection> Device<T> {
+            impl Device {
                 pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), DeviceError> {
                     match msg_type {
                         $(
