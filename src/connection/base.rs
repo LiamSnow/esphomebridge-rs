@@ -12,6 +12,7 @@ pub trait Connection {
     async fn disconnect(&mut self) -> Result<(), ConnectionError>;
 }
 
+#[derive(Hash)]
 pub enum AnyConnection {
     Noise(NoiseConnection),
     Plain(PlainConnection)

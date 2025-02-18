@@ -1,6 +1,7 @@
 use bytes::{BytesMut, BufMut};
 use tokio::io::AsyncReadExt;
 use tokio::{net::TcpStream, io::AsyncWriteExt};
+use std::hash::{Hash, Hasher};
 use crate::{error::ConnectionError, model::MessageType};
 use super::base::Connection;
 use super::util::{varu32_to_bytes, BufferEmpty, Varu32};
@@ -9,6 +10,12 @@ use super::util::{varu32_to_bytes, BufferEmpty, Varu32};
 pub struct PlainConnection {
     ip: String,
     stream: Option<TcpStream>,
+}
+
+impl Hash for PlainConnection {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ip.hash(state);
+    }
 }
 
 impl Connection for PlainConnection {

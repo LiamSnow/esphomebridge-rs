@@ -7,7 +7,7 @@ use paste::paste;
 use prost::Message;
 use bytes::BytesMut;
 use crate::model::MessageType;
-use crate::device::Device;
+use crate::device::ESPHomeDevice;
 
 #[derive(FromRepr, Display, Debug, PartialEq, Clone)]
 #[repr(i32)]
@@ -62,7 +62,7 @@ macro_rules! gen_entities {
                 }
             )*
 
-            impl Device {
+            impl ESPHomeDevice {
                 pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), DeviceError> {
                     match msg_type {
                         $(

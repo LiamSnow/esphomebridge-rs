@@ -1,14 +1,14 @@
 use bytes::BytesMut;
 use prost::Message;
 use std::{
-    collections::HashMap, time::{SystemTime, UNIX_EPOCH}
+    collections::HashMap, hash::{Hash, Hasher}, time::{SystemTime, UNIX_EPOCH}
 };
 
 use crate::{
     api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::Entities, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
-pub struct Device {
+pub struct ESPHomeDevice {
     pub(crate) conn: AnyConnection,
     password: String,
     pub connected: bool,
@@ -17,9 +17,15 @@ pub struct Device {
     pub logs: Vec<Log>
 }
 
-impl Device {
+impl Hash for ESPHomeDevice {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.conn.hash(state);
+    }
+}
+
+impl ESPHomeDevice {
     pub fn new(conn: AnyConnection, password: Option<String>) -> Self {
-        Device {
+        ESPHomeDevice {
             conn,
             password: password.unwrap_or("".to_string()),
             connected: false,

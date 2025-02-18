@@ -3,7 +3,7 @@ use bytes::{Buf, BytesMut};
 use memchr::memchr;
 use snow::{HandshakeState, TransportState};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
-use std::time::Duration;
+use std::{hash::{Hash, Hasher}, time::Duration};
 use crate::{error::ConnectionError, model::MessageType};
 use super::base::Connection;
 use super::util::BufferEmpty;
@@ -20,6 +20,12 @@ pub struct NoiseConnection {
     stream: Option<TcpStream>,
     noise: Option<TransportState>,
     pub server_name: Option<String>,
+}
+
+impl Hash for NoiseConnection {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ip.hash(state);
+    }
 }
 
 impl Connection for NoiseConnection {
