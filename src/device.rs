@@ -248,7 +248,7 @@ impl ESPHomeDevice {
 //TODO doc comments
 macro_rules! get_commands {
     ($($command:ident),*) => { paste::paste! {
-        impl Device {
+        impl ESPHomeDevice {
             $(
                 pub async fn [<$command:snake _command>](&mut self, req: &api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
                     self.process_incoming().await?;
