@@ -10,17 +10,20 @@ are not implemented:
 
 ```rust
 let dev = Device::new_noise("IP", "NOISE_PSK")?;
-
-//if you have multiple devices, you can connect
-//to them in parallel using tokio::task::JoinSet
 dev.connect().await?;
+
+// print info of all buttons
+for e in &dev.entities.button {
+    println!("Button: {:#?}", e.1);
+}
 
 //turn the light on
 let req = api::LightCommandRequest {
-    key: device.first_light_key(),
+    key: dev.entities.light.get("rgbct_bulb").unwrap().key,
     has_state: true,
     state: true
-    ...
+    ..Default::default()
 };
+
 dev.light_command(req).await?;
 ```

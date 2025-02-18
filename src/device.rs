@@ -5,14 +5,17 @@ use std::{
 };
 
 use crate::{
-    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::Entities, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
+    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfo, EntityInfos, EntityStates}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
 pub struct ESPHomeDevice {
     pub(crate) conn: AnyConnection,
     password: String,
     pub connected: bool,
-    pub entities: Entities,
+
+    pub entities: EntityInfos, // Ex. lights.rgbct_bulb -> EntityInfo
+    pub states: EntityStates, // Ex. lights.ENTITY_KEY -> Option<LightStateReponse>
+
     pub services: HashMap<u32, UserService>,
     pub logs: Vec<Log>
 }
@@ -29,7 +32,8 @@ impl ESPHomeDevice {
             conn,
             password: password.unwrap_or("".to_string()),
             connected: false,
-            entities: Entities::default(),
+            entities: EntityInfos::default(),
+            states: EntityStates::default(),
             services: HashMap::new(),
             logs: Vec::new()
         }
@@ -175,8 +179,8 @@ impl ESPHomeDevice {
     }
 
     pub fn first_light_key(&self) -> Option<u32> {
-        let first_light = self.entities.lights.iter().next()?;
-        Some(first_light.1.info.key)
+        let first_light = self.entities.light.iter().next()?;
+        Some(first_light.1.key)
     }
 
     pub async fn process_incoming(&mut self) -> Result<(), DeviceError> {

@@ -26,6 +26,7 @@ pub struct EntityInfo {
     pub disabled_by_default: bool,
     pub icon: String,
     pub category: EntityCategory,
+    pub typ: EntityType
 }
 
 //TODO doc comments
@@ -40,27 +41,21 @@ macro_rules! gen_entities {
     ) => {
         paste! {
             #[derive(Default)]
-            pub struct Entities {
-                $(
-                    pub [<$stateful:snake s>]: HashMap<u32, $stateful>,
-                )*
-                $(
-                    pub [<$nostate:snake s>]: HashMap<u32, $nostate>,
-                )*
+            pub struct EntityInfos {
+                $(pub [<$stateful:snake>]: HashMap<String, EntityInfo>,)*
+                $(pub [<$nostate:snake>]: HashMap<String, EntityInfo>,)*
             }
 
-            $(
-                pub struct $stateful {
-                    pub info: EntityInfo,
-                    pub state: Option<api::[<$stateful StateResponse>]>
-                }
-            )*
+            #[derive(Default)]
+            pub struct EntityStates {
+                $(pub [<$stateful:snake>]: HashMap<u32, Option<api::[<$stateful StateResponse>]>>,)*
+            }
 
-            $(
-                pub struct $nostate {
-                    pub info: EntityInfo,
-                }
-            )*
+            #[derive(Clone, PartialEq, Eq, Debug)]
+            pub enum EntityType {
+                $($stateful,)*
+                $($nostate,)*
+            }
 
             impl ESPHomeDevice {
                 pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), DeviceError> {
@@ -68,20 +63,18 @@ macro_rules! gen_entities {
                         $(
                             MessageType::[<ListEntities $stateful Response>] => {
                                 let res = api::[<ListEntities $stateful Response>]::decode(msg)?;
-                                self.entities.[<$stateful:snake s>].insert(
-                                    res.key,
-                                    [<$stateful>] {
-                                        info: EntityInfo {
-                                            object_id: res.object_id,
-                                            key: res.key,
-                                            name: res.name,
-                                            unique_id: res.unique_id,
-                                            disabled_by_default: res.disabled_by_default,
-                                            icon: res.icon,
-                                            category: EntityCategory::from_repr(res.entity_category)
-                                                .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
-                                        },
-                                        state: None
+                                self.entities.[<$stateful:snake>].insert(
+                                    res.object_id.clone(),
+                                    EntityInfo {
+                                        object_id: res.object_id,
+                                        key: res.key,
+                                        name: res.name,
+                                        unique_id: res.unique_id,
+                                        disabled_by_default: res.disabled_by_default,
+                                        icon: res.icon,
+                                        category: EntityCategory::from_repr(res.entity_category)
+                                            .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
+                                        typ: EntityType::$stateful
                                     }
                                 );
                             },
@@ -89,23 +82,23 @@ macro_rules! gen_entities {
                         $(
                             MessageType::[<ListEntities $nostate Response>] => {
                                 let res = api::[<ListEntities $nostate Response>]::decode(msg)?;
-                                self.entities.[<$nostate:snake s>].insert(
-                                    res.key,
-                                    [<$nostate>] {
-                                        info: EntityInfo {
-                                            object_id: res.object_id,
-                                            key: res.key,
-                                            name: res.name,
-                                            unique_id: res.unique_id,
-                                            disabled_by_default: res.disabled_by_default,
-                                            icon: res.icon,
-                                            category: EntityCategory::from_repr(res.entity_category)
-                                                .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
-                                        }
+                                self.entities.[<$nostate:snake>].insert(
+                                    res.object_id.clone(),
+                                    EntityInfo {
+                                        object_id: res.object_id,
+                                        key: res.key,
+                                        name: res.name,
+                                        unique_id: res.unique_id,
+                                        disabled_by_default: res.disabled_by_default,
+                                        icon: res.icon,
+                                        category: EntityCategory::from_repr(res.entity_category)
+                                            .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
+                                        typ: EntityType::$nostate
                                     }
                                 );
                             },
                         )*
+
                         _ => {
                             return Err(DeviceError::UnknownListEntitiesResponse(msg_type));
                         }
@@ -117,10 +110,10 @@ macro_rules! gen_entities {
                     match msg_type {
                         $(
                             MessageType::[<$stateful StateResponse>] => {
-                                let state = api::[<$stateful StateResponse>]::decode(msg)?;
-                                let entity = self.entities.[<$stateful:snake s>].get_mut(&state.key)
-                                    .ok_or(DeviceError::StateUpdateForUnknownEntity(state.key))?;
-                                entity.state = Some(state);
+                                let new_state = api::[<$stateful StateResponse>]::decode(msg)?;
+                                let state_val = self.states.[<$stateful:snake>].get_mut(&new_state.key)
+                                    .ok_or(DeviceError::StateUpdateForUnknownEntity(new_state.key))?;
+                                *state_val = Some(new_state);
                                 Ok(true)
                             }
                         )*
