@@ -15,7 +15,7 @@ pub struct ESPHomeDevice {
     pub entities: EntityInfos, // Ex. lights.rgbct_bulb -> EntityInfo
     pub states: EntityStates, // Ex. lights.ENTITY_KEY -> Option<LightStateReponse>
     pub services: HashMap<u32, UserService>,
-    pub logs: Vec<Log>
+    pub log_callback: Option<Box<dyn Fn(Log) + Send + 'static>>,
 }
 
 impl Hash for ESPHomeDevice {
@@ -33,7 +33,7 @@ impl ESPHomeDevice {
             entities: EntityInfos::default(),
             states: EntityStates::default(),
             services: HashMap::new(),
-            logs: Vec::new()
+            log_callback: None
         }
     }
 
@@ -120,7 +120,11 @@ impl ESPHomeDevice {
         Ok(())
     }
 
-    pub async fn subscribe_logs(&mut self, level: LogLevel, dump_config: bool) -> Result<(), DeviceError> {
+    pub async fn subscribe_logs<F>(&mut self, level: LogLevel, dump_config: bool, callback: F) -> Result<(), DeviceError>
+    where
+        F: Fn(Log) + Send + 'static,
+    {
+        self.log_callback = Some(Box::new(callback));
         self.process_incoming().await?;
         self.send(
             MessageType::SubscribeLogsRequest,
@@ -204,12 +208,14 @@ impl ESPHomeDevice {
                     ).await?;
                 }
                 MessageType::SubscribeLogsResponse => {
-                    let log = api::SubscribeLogsResponse::decode(msg)?;
-                    self.logs.push(Log {
-                        level: LogLevel::from_repr(log.level).ok_or(DeviceError::UnknownLogLevel(log.level))?,
-                        message: log.message.into(),
-                        send_failed: log.send_failed,
-                    });
+                    if let Some(callback) = &self.log_callback {
+                        let log = api::SubscribeLogsResponse::decode(msg)?;
+                        callback(Log {
+                            level: LogLevel::from_repr(log.level).ok_or(DeviceError::UnknownLogLevel(log.level))?,
+                            message: log.message.into(),
+                            send_failed: log.send_failed,
+                        });
+                    }
                 }
                 _ => {
                     if !self.process_state_update(&msg_type, msg)? {
