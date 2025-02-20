@@ -1,16 +1,24 @@
-use std::{sync::Arc, task::{Context, Poll, Wake, Waker}, io};
 
 use bytes::{BytesMut, BufMut};
-use tokio::{io::AsyncReadExt, net::TcpStream};
+use tokio::{io::{self, AsyncReadExt}, net::TcpStream};
 
 pub trait Varu32: AsyncReadExt {
-    async fn read_varu32(&mut self) -> io::Result<u32>;
+    async fn read_varu32(&mut self, first_byte: Option<u8>) -> io::Result<u32>;
 }
 
 impl Varu32 for TcpStream {
-    async fn read_varu32(&mut self) -> io::Result<u32> {
+    async fn read_varu32(&mut self, first_byte: Option<u8>) -> io::Result<u32> {
         let mut result: u32 = 0;
         let mut shift: u32 = 0;
+
+        if let Some(byte) = first_byte {
+            result |= (byte & 0x7f) as u32;
+            shift += 7;
+
+            if byte & 0x80 == 0 {
+                return Ok(result);
+            }
+        }
 
         loop {
             let mut buf = [0u8; 1];
@@ -24,7 +32,7 @@ impl Varu32 for TcpStream {
                 break;
             }
 
-            if shift >= 32 {
+            if shift >= 32 || (shift == 28 && byte > 0x0F) {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Varu32 too long"));
             }
         }
@@ -51,23 +59,4 @@ pub fn varu32_to_bytes(mut value: u32) -> BytesMut {
     }
 
     bytes
-}
-
-struct NoopWaker;
-impl Wake for NoopWaker {
-    fn wake(self: Arc<Self>) { }
-    fn wake_by_ref(self: &Arc<Self>) { }
-}
-
-
-pub trait BufferEmpty {
-    async fn buffer_empty(&mut self) -> bool;
-}
-
-impl BufferEmpty for TcpStream {
-    async fn buffer_empty(&mut self) -> bool {
-        let waker = Waker::from(Arc::new(NoopWaker));
-        let mut cx = Context::from_waker(&waker);
-        return matches!(self.poll_read_ready(&mut cx), Poll::Ready(Ok(())))
-    }
 }

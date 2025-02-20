@@ -31,6 +31,8 @@ pub enum DeviceError {
     UnknownEntityCategory(i32),
     #[error("wrong message type `{0}`")]
     WrongMessageType(MessageType),
+    #[error("unknown incoming message type `{0}`")]
+    UnknownIncomingMessageType(MessageType),
     #[error("unknown log level `{0}`")]
     UnknownLogLevel(i32),
 }

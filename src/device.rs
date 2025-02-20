@@ -5,17 +5,15 @@ use std::{
 };
 
 use crate::{
-    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfo, EntityInfos, EntityStates}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
+    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfos, EntityStates}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
 pub struct ESPHomeDevice {
     pub(crate) conn: AnyConnection,
     password: String,
     pub connected: bool,
-
     pub entities: EntityInfos, // Ex. lights.rgbct_bulb -> EntityInfo
     pub states: EntityStates, // Ex. lights.ENTITY_KEY -> Option<LightStateReponse>
-
     pub services: HashMap<u32, UserService>,
     pub logs: Vec<Log>
 }
@@ -122,11 +120,11 @@ impl ESPHomeDevice {
         Ok(())
     }
 
-    pub async fn subscribe_logs(&mut self, level: i32, dump_config: bool) -> Result<(), DeviceError> {
+    pub async fn subscribe_logs(&mut self, level: LogLevel, dump_config: bool) -> Result<(), DeviceError> {
         self.process_incoming().await?;
         self.send(
             MessageType::SubscribeLogsRequest,
-            &api::SubscribeLogsRequest { level, dump_config },
+            &api::SubscribeLogsRequest { level: level as i32, dump_config },
         ).await?;
         Ok(())
     }
@@ -160,7 +158,7 @@ impl ESPHomeDevice {
 
     ///WARNING: Call process_incoming first
     pub async fn recieve<U: prost::Message + Default>(&mut self, expected_msg_type: MessageType) -> Result<U, DeviceError> {
-        let (msg_type, mut msg) = self.conn.receive_message().await?;
+        let (msg_type, mut msg) = self.conn.receive_message(None).await?;
         if msg_type != expected_msg_type {
             return Err(DeviceError::WrongMessageType(msg_type));
         }
@@ -178,14 +176,9 @@ impl ESPHomeDevice {
         Ok(self.recieve(res_type).await?)
     }
 
-    pub fn first_light_key(&self) -> Option<u32> {
-        let first_light = self.entities.light.iter().next()?;
-        Some(first_light.1.key)
-    }
-
     pub async fn process_incoming(&mut self) -> Result<(), DeviceError> {
-        while !self.conn.buffer_empty().await {
-            let (msg_type, msg) = self.conn.receive_message().await?;
+        while let Some(first_byte) = self.conn.try_read_byte()? {
+            let (msg_type, msg) = self.conn.receive_message(Some(first_byte)).await?;
 
             match msg_type {
                 MessageType::DisconnectRequest => {
@@ -220,7 +213,7 @@ impl ESPHomeDevice {
                 }
                 _ => {
                     if !self.process_state_update(&msg_type, msg)? {
-                        println!("unexpectedly got incoming msg: {:#?}", msg_type);
+                        return Err(DeviceError::UnknownIncomingMessageType(msg_type));
                     }
                 },
             }
@@ -232,7 +225,7 @@ impl ESPHomeDevice {
         self.process_incoming().await?;
         self.send(MessageType::ListEntitiesRequest, &api::ListEntitiesRequest {}).await?;
         loop {
-            let (msg_type, msg) = self.conn.receive_message().await?;
+            let (msg_type, msg) = self.conn.receive_message(None).await?;
 
             match msg_type {
                 MessageType::ListEntitiesServicesResponse => {

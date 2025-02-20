@@ -30,40 +30,50 @@ pub struct EntityInfo {
 }
 
 //TODO doc comments
-macro_rules! gen_entities {
-    (
-        stateful {
-            $($stateful:ident),*
-        }
-        nostate {
-            $($nostate:ident),*
-        }
-    ) => {
+macro_rules! gen_entity_infos {
+    ($($name:ident),*) => {
         paste! {
             #[derive(Default)]
             pub struct EntityInfos {
-                $(pub [<$stateful:snake>]: HashMap<String, EntityInfo>,)*
-                $(pub [<$nostate:snake>]: HashMap<String, EntityInfo>,)*
+                /// name (object_id) -> info
+                $(pub [<$name:snake>]: HashMap<String, EntityInfo>,)*
             }
 
-            #[derive(Default)]
-            pub struct EntityStates {
-                $(pub [<$stateful:snake>]: HashMap<u32, Option<api::[<$stateful StateResponse>]>>,)*
+            impl EntityInfos {
+                /// converts the struct to hashmap, IE self.lights -> hashmap.get("lights")
+                pub fn to_hashmap(&self) -> HashMap<String, &HashMap<String, EntityInfo>> {
+                    let mut h = HashMap::new();
+                    $(h.insert(stringify!([<$name:snake>]).to_string(), &self.[<$name:snake>]);)*
+                    h
+                }
             }
 
             #[derive(Clone, PartialEq, Eq, Debug)]
             pub enum EntityType {
-                $($stateful,)*
-                $($nostate,)*
+                $($name,)*
             }
 
             impl ESPHomeDevice {
+                ///Gets all keys, including debug and config types
+                $(pub fn [<get_all_ $name:snake _keys>](&self) -> Vec<u32> {
+                    self.entities.[<$name:snake>].values().map(|entity| entity.key).collect()
+                })*
+
+                ///Gets keys, excluding debug and config types
+                $(pub fn [<get_primary_ $name:snake _keys>](&self) -> Vec<u32> {
+                    self.entities.[<$name:snake>]
+                        .values()
+                        .filter(|entity| entity.category == EntityCategory::None)
+                        .map(|entity| entity.key)
+                        .collect()
+                })*
+
                 pub(crate) fn save_entity(&mut self, msg_type: MessageType, msg: BytesMut) -> Result<(), DeviceError> {
                     match msg_type {
                         $(
-                            MessageType::[<ListEntities $stateful Response>] => {
-                                let res = api::[<ListEntities $stateful Response>]::decode(msg)?;
-                                self.entities.[<$stateful:snake>].insert(
+                            MessageType::[<ListEntities $name Response>] => {
+                                let res = api::[<ListEntities $name Response>]::decode(msg)?;
+                                self.entities.[<$name:snake>].insert(
                                     res.object_id.clone(),
                                     EntityInfo {
                                         object_id: res.object_id,
@@ -74,26 +84,7 @@ macro_rules! gen_entities {
                                         icon: res.icon,
                                         category: EntityCategory::from_repr(res.entity_category)
                                             .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
-                                        typ: EntityType::$stateful
-                                    }
-                                );
-                            },
-                        )*
-                        $(
-                            MessageType::[<ListEntities $nostate Response>] => {
-                                let res = api::[<ListEntities $nostate Response>]::decode(msg)?;
-                                self.entities.[<$nostate:snake>].insert(
-                                    res.object_id.clone(),
-                                    EntityInfo {
-                                        object_id: res.object_id,
-                                        key: res.key,
-                                        name: res.name,
-                                        unique_id: res.unique_id,
-                                        disabled_by_default: res.disabled_by_default,
-                                        icon: res.icon,
-                                        category: EntityCategory::from_repr(res.entity_category)
-                                            .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
-                                        typ: EntityType::$nostate
+                                        typ: EntityType::$name
                                     }
                                 );
                             },
@@ -106,14 +97,27 @@ macro_rules! gen_entities {
                     Ok(())
                 }
 
+
+            }
+        }
+    }
+}
+
+macro_rules! gen_entity_states {
+    ($($name:ident),*) => {
+        paste! {
+            #[derive(Default)]
+            pub struct EntityStates {
+                $(pub [<$name:snake>]: HashMap<u32, Option<api::[<$name StateResponse>]>>,)*
+            }
+
+            impl ESPHomeDevice {
                 pub(crate) fn process_state_update(&mut self, msg_type: &MessageType, msg: BytesMut) -> Result<bool, DeviceError> {
                     match msg_type {
                         $(
-                            MessageType::[<$stateful StateResponse>] => {
-                                let new_state = api::[<$stateful StateResponse>]::decode(msg)?;
-                                let state_val = self.states.[<$stateful:snake>].get_mut(&new_state.key)
-                                    .ok_or(DeviceError::StateUpdateForUnknownEntity(new_state.key))?;
-                                *state_val = Some(new_state);
+                            MessageType::[<$name StateResponse>] => {
+                                let new_state = api::[<$name StateResponse>]::decode(msg)?;
+                                self.states.[<$name:snake>].insert(new_state.key, Some(new_state));
                                 Ok(true)
                             }
                         )*
@@ -125,32 +129,51 @@ macro_rules! gen_entities {
     }
 }
 
-gen_entities!(
-    stateful {
-        BinarySensor,
-        Cover,
-        Fan,
-        Light,
-        Sensor,
-        Switch,
-        TextSensor,
-        Climate,
-        Number,
-        Select,
-        Siren,
-        Lock,
-        MediaPlayer,
-        AlarmControlPanel,
-        Text,
-        Date,
-        Time,
-        Valve,
-        DateTime,
-        Update
-    }
-    nostate {
-        Button,
-        Camera,
-        Event
-    }
+gen_entity_infos!(
+    BinarySensor,
+    Cover,
+    Fan,
+    Light,
+    Sensor,
+    Switch,
+    TextSensor,
+    Climate,
+    Number,
+    Select,
+    Siren,
+    Lock,
+    MediaPlayer,
+    AlarmControlPanel,
+    Text,
+    Date,
+    Time,
+    Valve,
+    DateTime,
+    Update,
+    Button,
+    Camera,
+    Event
+);
+
+gen_entity_states!(
+    BinarySensor,
+    Cover,
+    Fan,
+    Light,
+    Sensor,
+    Switch,
+    TextSensor,
+    Climate,
+    Number,
+    Select,
+    Siren,
+    Lock,
+    MediaPlayer,
+    AlarmControlPanel,
+    Text,
+    Date,
+    Time,
+    Valve,
+    DateTime,
+    Update
 );

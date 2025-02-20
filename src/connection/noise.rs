@@ -6,7 +6,6 @@ use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
 use std::{hash::{Hash, Hasher}, time::Duration};
 use crate::{error::ConnectionError, model::MessageType};
 use super::base::Connection;
-use super::util::BufferEmpty;
 
 pub const NOISE_HELLO: &[u8; 3] = b"\x01\x00\x00";
 pub const READ_TIMEOUT: Option<Duration> = Some(Duration::from_secs(60));
@@ -15,9 +14,9 @@ pub const NOISE_PROLOGUE: &[u8; 14] = b"NoiseAPIInit\x00\x00";
 pub const NOISE_PSK_LEN: usize = 32;
 
 pub struct NoiseConnection {
-    ip: String,
+    pub(crate) ip: String,
     noise_psk: String,
-    stream: Option<TcpStream>,
+    pub(crate) stream: Option<TcpStream>,
     noise: Option<TransportState>,
     pub server_name: Option<String>,
 }
@@ -29,29 +28,6 @@ impl Hash for NoiseConnection {
 }
 
 impl Connection for NoiseConnection {
-    async fn connect(&mut self) -> Result<(), ConnectionError> {
-        if self.stream.is_some() {
-            return Ok(()) //TODO: is this wanted behavior... should this error? should it reconnect?
-        }
-        let mut noise_handshake = Self::setup_noise(&self.noise_psk)?;
-        let mut stream = TcpStream::connect(&self.ip).await?;
-        Self::send_hello(&mut stream, &mut noise_handshake).await?;
-        self.server_name = Some(Self::receive_hello(&mut stream).await?);
-        self.noise = Some(Self::receive_handshake(&mut stream, noise_handshake).await?);
-        self.stream = Some(stream);
-        Ok(())
-    }
-
-    async fn disconnect(&mut self) -> Result<(), ConnectionError> {
-        if let Some(stream) = &mut self.stream {
-            stream.shutdown().await?;
-        }
-        self.noise = None;
-        self.stream = None;
-        self.server_name = None;
-        Ok(())
-    }
-
     async fn send_message(&mut self, msg_type: MessageType, msg_bytes: &BytesMut) -> Result<(), ConnectionError> {
         let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
         let noise = self.noise.as_mut().ok_or(ConnectionError::NotConnected)?;
@@ -94,10 +70,10 @@ impl Connection for NoiseConnection {
         Ok(())
     }
 
-    async fn receive_message(&mut self) -> Result<(MessageType, BytesMut), ConnectionError> {
+    async fn receive_message(&mut self, first_byte: Option<u8>) -> Result<(MessageType, BytesMut), ConnectionError> {
         let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
         let noise = self.noise.as_mut().ok_or(ConnectionError::NotConnected)?;
-        let frame = Self::read_frame(stream).await?;
+        let frame = Self::read_frame(stream, first_byte).await?;
         let mut msg = BytesMut::with_capacity(65535);
         msg.resize(65535, 0);
         let msg_size = noise.read_message(&frame, &mut msg)?;
@@ -109,12 +85,40 @@ impl Connection for NoiseConnection {
         Ok((msg_type, msg))
     }
 
-    async fn buffer_empty(&mut self) -> bool {
-        if let Some(stream) = &mut self.stream {
-            return stream.buffer_empty().await
+    fn try_read_byte(&mut self) -> Result<Option<u8>, ConnectionError> {
+        let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
+        let mut buf = [0u8; 1];
+        if stream.try_read(&mut buf).is_ok() {
+            Ok(Some(buf[0]))
         }
-        true
+        else {
+            Ok(None)
+        }
     }
+
+    async fn connect(&mut self) -> Result<(), ConnectionError> {
+        if self.stream.is_some() {
+            return Ok(()) //TODO: is this wanted behavior... should this error? should it reconnect?
+        }
+        let mut noise_handshake = Self::setup_noise(&self.noise_psk)?;
+        let mut stream = TcpStream::connect(&self.ip).await?;
+        Self::send_hello(&mut stream, &mut noise_handshake).await?;
+        self.server_name = Some(Self::receive_hello(&mut stream).await?);
+        self.noise = Some(Self::receive_handshake(&mut stream, noise_handshake).await?);
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> Result<(), ConnectionError> {
+        if let Some(stream) = &mut self.stream {
+            stream.shutdown().await?;
+        }
+        self.noise = None;
+        self.stream = None;
+        self.server_name = None;
+        Ok(())
+    }
+
 }
 
 impl NoiseConnection {
@@ -163,7 +167,7 @@ impl NoiseConnection {
     }
 
     async fn receive_hello(stream: &mut TcpStream) -> Result<String, ConnectionError> {
-        let frame = Self::read_frame(stream).await?;
+        let frame = Self::read_frame(stream, None).await?;
         if frame[0] != 0x01 {
             return Err(ConnectionError::ClientWantsUnknownNoiseProtocol(frame[0]))
         }
@@ -173,7 +177,7 @@ impl NoiseConnection {
     }
 
     async fn receive_handshake(stream: &mut TcpStream, mut noise_handshake: HandshakeState) -> Result<TransportState, ConnectionError> {
-        let frame = Self::read_frame(stream).await?;
+        let frame = Self::read_frame(stream, None).await?;
         if frame[0] != 0x00 {
             return Err(ConnectionError::HandshakeHadWrongPreamble(frame[0]));
         }
@@ -181,13 +185,25 @@ impl NoiseConnection {
         Ok(noise_handshake.into_transport_mode()?)
     }
 
-    async fn read_frame(stream: &mut TcpStream) -> Result<BytesMut, ConnectionError> {
-        let mut header = [0u8; 3];
-        stream.read_exact(&mut header).await?;
-        if header[0] != 0x01 {
-            return Err(ConnectionError::FrameHadWrongPreamble(header[0]));
+    async fn read_frame(stream: &mut TcpStream, first_byte: Option<u8>) -> Result<BytesMut, ConnectionError> {
+        let frame_size;
+        if let Some(first_byte) = first_byte {
+            if first_byte != 0x01 {
+                return Err(ConnectionError::FrameHadWrongPreamble(first_byte));
+            }
+            let mut header = [0u8; 2];
+            stream.read_exact(&mut header).await?;
+            frame_size = u16::from_be_bytes([header[0], header[1]]) as usize;
         }
-        let frame_size = u16::from_be_bytes([header[1], header[2]]) as usize;
+        else {
+            let mut header = [0u8; 3];
+            stream.read_exact(&mut header).await?;
+            if header[0] != 0x01 {
+                return Err(ConnectionError::FrameHadWrongPreamble(header[0]));
+            }
+            frame_size = u16::from_be_bytes([header[1], header[2]]) as usize;
+        }
+
         let mut frame = BytesMut::with_capacity(frame_size);
         let size = stream.read_buf(&mut frame).await?;
         frame.truncate(size);

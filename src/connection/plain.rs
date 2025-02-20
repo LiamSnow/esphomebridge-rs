@@ -4,12 +4,12 @@ use tokio::{net::TcpStream, io::AsyncWriteExt};
 use std::hash::{Hash, Hasher};
 use crate::{error::ConnectionError, model::MessageType};
 use super::base::Connection;
-use super::util::{varu32_to_bytes, BufferEmpty, Varu32};
+use super::util::{varu32_to_bytes, Varu32};
 
 ///NOTE UNTESTED!!!!!!!!
 pub struct PlainConnection {
-    ip: String,
-    stream: Option<TcpStream>,
+    pub(crate) ip: String,
+    pub(crate) stream: Option<TcpStream>,
 }
 
 impl Hash for PlainConnection {
@@ -19,23 +19,6 @@ impl Hash for PlainConnection {
 }
 
 impl Connection for PlainConnection {
-    async fn connect(&mut self) -> Result<(), ConnectionError> {
-        if self.stream.is_some() {
-            return Ok(()) //TODO: is this wanted behavior... should this error? should it reconnect?
-        }
-        let stream = TcpStream::connect(&self.ip).await?;
-        self.stream = Some(stream);
-        Ok(())
-    }
-
-    async fn disconnect(&mut self) -> Result<(), ConnectionError> {
-        if let Some(stream) = &mut self.stream {
-            stream.shutdown().await?;
-        }
-        self.stream = None;
-        Ok(())
-    }
-
     async fn send_message(&mut self, msg_type: MessageType, msg_bytes: &BytesMut) -> Result<(), ConnectionError> {
         let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
 
@@ -55,15 +38,15 @@ impl Connection for PlainConnection {
         Ok(())
     }
 
-    async fn receive_message(&mut self) -> Result<(MessageType, BytesMut), ConnectionError> {
+    async fn receive_message(&mut self, first_byte: Option<u8>) -> Result<(MessageType, BytesMut), ConnectionError> {
         let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
-        let preamble = stream.read_varu32().await?;
+        let preamble = stream.read_varu32(first_byte).await?;
         if preamble != 0x00 {
             return Err(ConnectionError::FrameHadWrongPreamble(preamble as u8))
         }
 
-        let msg_len = stream.read_varu32().await? as usize;
-        let msg_type_num = stream.read_varu32().await? as u16;
+        let msg_len = stream.read_varu32(None).await? as usize;
+        let msg_type_num = stream.read_varu32(None).await? as u16;
         let msg_type = MessageType::from_repr(msg_type_num)
             .ok_or(ConnectionError::UnknownMessageType(msg_type_num))?;
         let mut msg = BytesMut::with_capacity(msg_len);
@@ -71,11 +54,32 @@ impl Connection for PlainConnection {
         Ok((msg_type, msg))
     }
 
-    async fn buffer_empty(&mut self) -> bool {
-        if let Some(stream) = &mut self.stream {
-            return stream.buffer_empty().await
+    fn try_read_byte(&mut self) -> Result<Option<u8>, ConnectionError> {
+        let stream = self.stream.as_mut().ok_or(ConnectionError::NotConnected)?;
+        let mut buf = [0u8; 1];
+        if stream.try_read(&mut buf).is_ok() {
+            Ok(Some(buf[0]))
         }
-        true
+        else {
+            Ok(None)
+        }
+    }
+
+    async fn connect(&mut self) -> Result<(), ConnectionError> {
+        if self.stream.is_some() {
+            return Ok(()) //TODO: is this wanted behavior... should this error? should it reconnect?
+        }
+        let stream = TcpStream::connect(&self.ip).await?;
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> Result<(), ConnectionError> {
+        if let Some(stream) = &mut self.stream {
+            stream.shutdown().await?;
+        }
+        self.stream = None;
+        Ok(())
     }
 }
 

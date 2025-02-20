@@ -6,8 +6,8 @@ use super::{noise::NoiseConnection, plain::PlainConnection};
 #[allow(async_fn_in_trait)]
 pub trait Connection {
     async fn send_message(&mut self, msg_type: MessageType, msg_bytes: &BytesMut) -> Result<(), ConnectionError>;
-    async fn receive_message(&mut self) -> Result<(MessageType, BytesMut), ConnectionError>;
-    async fn buffer_empty(&mut self) -> bool;
+    async fn receive_message(&mut self, first_byte: Option<u8>) -> Result<(MessageType, BytesMut), ConnectionError>;
+    fn try_read_byte(&mut self) -> Result<Option<u8>, ConnectionError>;
     async fn connect(&mut self) -> Result<(), ConnectionError>;
     async fn disconnect(&mut self) -> Result<(), ConnectionError>;
 }
@@ -38,17 +38,17 @@ impl Connection for AnyConnection {
         }
     }
 
-    async fn receive_message(&mut self) -> Result<(MessageType, BytesMut), ConnectionError> {
+    async fn receive_message(&mut self, first_byte: Option<u8>) -> Result<(MessageType, BytesMut), ConnectionError> {
         match self {
-            AnyConnection::Noise(con) => con.receive_message().await,
-            AnyConnection::Plain(con) => con.receive_message().await
+            AnyConnection::Noise(con) => con.receive_message(first_byte).await,
+            AnyConnection::Plain(con) => con.receive_message(first_byte).await
         }
     }
 
-    async fn buffer_empty(&mut self) -> bool {
+    fn try_read_byte(&mut self) -> Result<Option<u8>, ConnectionError> {
         match self {
-            AnyConnection::Noise(con) => con.buffer_empty().await,
-            AnyConnection::Plain(con) => con.buffer_empty().await
+            AnyConnection::Noise(con) => con.try_read_byte(),
+            AnyConnection::Plain(con) => con.try_read_byte()
         }
     }
 
