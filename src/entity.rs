@@ -2,30 +2,26 @@ use std::collections::HashMap;
 
 use crate::error::DeviceError;
 use crate::api;
-use strum_macros::{Display, FromRepr};
 use paste::paste;
 use prost::Message;
 use bytes::BytesMut;
 use crate::model::MessageType;
 use crate::device::ESPHomeDevice;
+use strum_macros::Display;
 
-#[derive(FromRepr, Display, Debug, PartialEq, Clone)]
-#[repr(i32)]
-pub enum EntityCategory {
-    None = 0,
-    Config = 1,
-    Diagnostic = 2,
-}
+pub const ENTITY_CATEGORY_NONE: i32 = 0;
+pub const ENTITY_CATEGORY_CONFIG: i32 = 1;
+pub const ENTITY_CATEGORY_DIAGNOSTIC: i32 = 2;
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct EntityInfo {
-    pub object_id: String,
+pub struct EntityInfo<'a> {
+    pub object_id: &'a str,
     pub key: u32,
-    pub name: String,
-    pub unique_id: String,
+    pub name: &'a str,
+    pub unique_id: &'a str,
     pub disabled_by_default: bool,
-    pub icon: String,
-    pub category: EntityCategory,
+    pub icon: &'a str,
+    pub category: i32,
     pub typ: EntityType
 }
 
@@ -36,19 +32,32 @@ macro_rules! gen_entity_infos {
             #[derive(Default)]
             pub struct EntityInfos {
                 /// name (object_id) -> info
-                $(pub [<$name:snake>]: HashMap<String, EntityInfo>,)*
+                $(pub [<$name:snake>]: HashMap<String, api::[<ListEntities $name Response>]>,)*
             }
 
             impl EntityInfos {
-                /// converts the struct to hashmap, IE self.lights -> hashmap.get("lights")
-                pub fn to_hashmap(&self) -> HashMap<String, &HashMap<String, EntityInfo>> {
-                    let mut h = HashMap::new();
-                    $(h.insert(stringify!([<$name:snake>]).to_string(), &self.[<$name:snake>]);)*
-                    h
+                /// converts every entity to EntityInfo
+                pub fn get_all<'a>(&'a self) -> Vec<EntityInfo<'a>> {
+                    let mut v = Vec::new();
+                    $(
+                        for (_, entity) in &self.[<$name:snake>] {
+                            v.push(EntityInfo {
+                                object_id: &entity.object_id,
+                                key: entity.key,
+                                name: &entity.name,
+                                unique_id: &entity.unique_id,
+                                disabled_by_default: entity.disabled_by_default,
+                                icon: &entity.icon,
+                                category: entity.entity_category,
+                                typ: EntityType::$name
+                            });
+                        }
+                    )*
+                    v
                 }
             }
 
-            #[derive(Clone, PartialEq, Eq, Debug)]
+            #[derive(Clone, PartialEq, Eq, Debug, Display)]
             pub enum EntityType {
                 $($name,)*
             }
@@ -63,7 +72,7 @@ macro_rules! gen_entity_infos {
                 $(pub fn [<get_primary_ $name:snake _keys>](&self) -> Vec<u32> {
                     self.entities.[<$name:snake>]
                         .values()
-                        .filter(|entity| entity.category == EntityCategory::None)
+                        .filter(|entity| entity.entity_category == ENTITY_CATEGORY_NONE)
                         .map(|entity| entity.key)
                         .collect()
                 })*
@@ -73,20 +82,7 @@ macro_rules! gen_entity_infos {
                         $(
                             MessageType::[<ListEntities $name Response>] => {
                                 let res = api::[<ListEntities $name Response>]::decode(msg)?;
-                                self.entities.[<$name:snake>].insert(
-                                    res.object_id.clone(),
-                                    EntityInfo {
-                                        object_id: res.object_id,
-                                        key: res.key,
-                                        name: res.name,
-                                        unique_id: res.unique_id,
-                                        disabled_by_default: res.disabled_by_default,
-                                        icon: res.icon,
-                                        category: EntityCategory::from_repr(res.entity_category)
-                                            .ok_or(DeviceError::UnknownEntityCategory(res.entity_category))?,
-                                        typ: EntityType::$name
-                                    }
-                                );
+                                self.entities.[<$name:snake>].insert(res.object_id.clone(), res);
                             },
                         )*
 
@@ -96,8 +92,6 @@ macro_rules! gen_entity_infos {
                     }
                     Ok(())
                 }
-
-
             }
         }
     }
@@ -106,22 +100,31 @@ macro_rules! gen_entity_infos {
 macro_rules! gen_entity_states {
     ($($name:ident),*) => {
         paste! {
-            #[derive(Default)]
-            pub struct EntityStates {
-                $(pub [<$name:snake>]: HashMap<u32, Option<api::[<$name StateResponse>]>>,)*
+            #[derive(Debug)]
+            pub struct EntityStateUpdate {
+                pub subdev_name: String,
+                pub value: EntityStateUpdateValue
+            }
+
+            #[derive(Debug)]
+            pub enum EntityStateUpdateValue {
+                $($name(api::[<$name StateResponse>]),)*
             }
 
             impl ESPHomeDevice {
-                pub(crate) fn process_state_update(&mut self, msg_type: &MessageType, msg: BytesMut) -> Result<bool, DeviceError> {
+                pub(crate) fn process_state_update(&mut self, msg_type: &MessageType, msg: BytesMut) -> Result<EntityStateUpdate, DeviceError> {
                     match msg_type {
                         $(
                             MessageType::[<$name StateResponse>] => {
                                 let new_state = api::[<$name StateResponse>]::decode(msg)?;
-                                self.states.[<$name:snake>].insert(new_state.key, Some(new_state));
-                                Ok(true)
+                                let subdev_name = self.entity_key_to_name.get(&new_state.key)
+                                    .ok_or(DeviceError::StateUpdateForUnknownEntity(new_state.key))?
+                                    .to_string();
+                                let value = EntityStateUpdateValue::$name(new_state);
+                                Ok(EntityStateUpdate { subdev_name, value })
                             }
                         )*
-                        _ => Ok(false)
+                        _ => Err(DeviceError::UnknownIncomingMessageType(msg_type.clone()))
                     }
                 }
             }

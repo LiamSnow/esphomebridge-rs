@@ -1,11 +1,12 @@
 use bytes::BytesMut;
 use prost::Message;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use std::{
     collections::HashMap, hash::{Hash, Hasher}, time::{SystemTime, UNIX_EPOCH}
 };
 
 use crate::{
-    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfos, EntityStates}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
+    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfos, EntityStateUpdate}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
 pub struct ESPHomeDevice {
@@ -13,9 +14,11 @@ pub struct ESPHomeDevice {
     password: String,
     pub connected: bool,
     pub entities: EntityInfos, // Ex. lights.rgbct_bulb -> EntityInfo
-    pub states: EntityStates, // Ex. lights.ENTITY_KEY -> Option<LightStateReponse>
+    pub entity_key_to_name: HashMap<u32, String>,
     pub services: HashMap<u32, UserService>,
-    pub log_callback: Option<Box<dyn Fn(Log) + Send + 'static>>,
+    log_tx: Option<Sender<Log>>,
+    state_update_tx: Option<Sender<EntityStateUpdate>>,
+    pub last_ping: Option<SystemTime>
 }
 
 impl Hash for ESPHomeDevice {
@@ -31,9 +34,11 @@ impl ESPHomeDevice {
             password: password.unwrap_or("".to_string()),
             connected: false,
             entities: EntityInfos::default(),
-            states: EntityStates::default(),
+            entity_key_to_name: HashMap::new(),
             services: HashMap::new(),
-            log_callback: None
+            log_tx: None,
+            state_update_tx: None,
+            last_ping: None
         }
     }
 
@@ -49,7 +54,7 @@ impl ESPHomeDevice {
 
     pub async fn connect(&mut self) -> Result<(), DeviceError> {
         if self.connected {
-            return Ok(())
+            return Ok(()) //TODO should this reconnect?
         }
 
         self.conn.connect().await?;
@@ -79,16 +84,27 @@ impl ESPHomeDevice {
         Ok(())
     }
 
+    /// Ping without waiting for response
     pub async fn ping(&mut self) -> Result<(), DeviceError> {
+        self.send(
+            MessageType::PingRequest,
+            &api::PingRequest {},
+        ).await
+    }
+
+    /// Ping and wait for response
+    pub async fn ping_wait(&mut self) -> Result<(), DeviceError> {
         self.process_incoming().await?;
         let _: api::PingResponse = self.transaction(
             MessageType::PingRequest,
             &api::PingRequest {},
             MessageType::PingResponse,
         ).await?;
+        self.last_ping = Some(SystemTime::now());
         Ok(())
     }
 
+    /// Send disconnect request to device, wait for response, then disconnect socket
     pub async fn disconnect(&mut self) -> Result<(), DeviceError> {
         self.process_incoming().await?;
         let _: api::DisconnectResponse = self.transaction(
@@ -96,6 +112,11 @@ impl ESPHomeDevice {
             &api::DisconnectRequest {},
             MessageType::DisconnectResponse,
         ).await?;
+        self.force_disconnect().await
+    }
+
+    /// Disconnect socket (without sending disconnect request to device)
+    pub async fn force_disconnect(&mut self) -> Result<(), DeviceError> {
         self.conn.disconnect().await?;
         self.connected = false;
         Ok(())
@@ -111,46 +132,47 @@ impl ESPHomeDevice {
         Ok(res)
     }
 
-    pub async fn subscribe_states(&mut self) -> Result<(), DeviceError> {
-        self.process_incoming().await?;
+    /// Request device to send state updates.
+    /// Returns a mpsc channel (of `buffer_size`) where state updates will be send
+    /// Note: Will only read from the socket when calling directly calling process_incoming or
+    ///       indirectly through certain commands which call process_incoming (ex ping_wait)
+    pub async fn subscribe_states(&mut self, buffer_size: usize) -> Result<Receiver<EntityStateUpdate>, DeviceError> {
+        let (tx, rx) = mpsc::channel(buffer_size);
+        self.state_update_tx = Some(tx);
         self.send(
             MessageType::SubscribeStatesRequest,
             &api::SubscribeStatesRequest {},
         ).await?;
-        Ok(())
+        Ok(rx)
     }
 
-    pub async fn subscribe_logs<F>(&mut self, level: LogLevel, dump_config: bool, callback: F) -> Result<(), DeviceError>
-    where
-        F: Fn(Log) + Send + 'static,
-    {
-        self.log_callback = Some(Box::new(callback));
-        self.process_incoming().await?;
+    /// Request device to send logs.
+    /// Returns a mpsc channel (of `buffer_size`) where logs will be send
+    /// Note: Will only read from the socket when calling directly calling process_incoming or
+    ///       indirectly through other commands (which call process_incoming first)
+    pub async fn subscribe_logs(&mut self, level: LogLevel, dump_config: bool, buffer_size: usize) -> Result<Receiver<Log>, DeviceError> {
+        let (tx, rx) = mpsc::channel(buffer_size);
+        self.log_tx = Some(tx);
         self.send(
             MessageType::SubscribeLogsRequest,
             &api::SubscribeLogsRequest { level: level as i32, dump_config },
         ).await?;
-        Ok(())
+        Ok(rx)
     }
 
-
     pub async fn execute_service(&mut self, req: &api::ExecuteServiceRequest) -> Result<(), DeviceError> {
-        self.process_incoming().await?;
-        self.send(MessageType::ExecuteServiceRequest, req).await?;
-        Ok(())
+        self.send(MessageType::ExecuteServiceRequest, req).await
     }
 
     pub async fn get_camera_image(&mut self, req: &api::CameraImageRequest) -> Result<api::CameraImageResponse, DeviceError> {
         self.process_incoming().await?;
-        let res: api::CameraImageResponse = self.transaction(
+        self.transaction(
             MessageType::CameraImageRequest,
             req,
             MessageType::CameraImageResponse,
-        ).await?;
-        Ok(res)
+        ).await
     }
 
-    ///WARNING: Call process_incoming first
     pub async fn send(&mut self, msg_type: MessageType, msg: &impl prost::Message) -> Result<(), DeviceError> {
         let msg_len = msg.encoded_len();
         let mut bytes = BytesMut::with_capacity(msg_len);
@@ -160,7 +182,6 @@ impl ESPHomeDevice {
         Ok(())
     }
 
-    ///WARNING: Call process_incoming first
     pub async fn recieve<U: prost::Message + Default>(&mut self, expected_msg_type: MessageType) -> Result<U, DeviceError> {
         let (msg_type, mut msg) = self.conn.receive_message(None).await?;
         if msg_type != expected_msg_type {
@@ -169,7 +190,6 @@ impl ESPHomeDevice {
         Ok(U::decode(&mut msg)?)
     }
 
-    ///WARNING: Call process_incoming first
     pub async fn transaction<U: prost::Message + Default>(
         &mut self,
         req_type: MessageType,
@@ -196,6 +216,9 @@ impl ESPHomeDevice {
                 MessageType::PingRequest => {
                     self.send(MessageType::PingResponse, &api::PingResponse {}).await?;
                 }
+                MessageType::PingResponse => {
+                    self.last_ping = Some(SystemTime::now());
+                }
                 MessageType::GetTimeRequest => {
                     self.send(
                         MessageType::GetTimeResponse,
@@ -208,18 +231,19 @@ impl ESPHomeDevice {
                     ).await?;
                 }
                 MessageType::SubscribeLogsResponse => {
-                    if let Some(callback) = &self.log_callback {
+                    if let Some(log_tx) = &self.log_tx {
                         let log = api::SubscribeLogsResponse::decode(msg)?;
-                        callback(Log {
+                        log_tx.send(Log {
                             level: LogLevel::from_repr(log.level).ok_or(DeviceError::UnknownLogLevel(log.level))?,
                             message: log.message.into(),
                             send_failed: log.send_failed,
-                        });
+                        }).await?;
                     }
                 }
                 _ => {
-                    if !self.process_state_update(&msg_type, msg)? {
-                        return Err(DeviceError::UnknownIncomingMessageType(msg_type));
+                    let update = self.process_state_update(&msg_type, msg)?;
+                    if let Some(send_update_tx) = &self.state_update_tx {
+                        send_update_tx.send(update).await?;
                     }
                 },
             }
@@ -239,22 +263,25 @@ impl ESPHomeDevice {
                         .try_into().map_err(|e| DeviceError::UserServiceParseError(e))?;
                     self.services.insert(res.key, res);
                 },
-                MessageType::ListEntitiesDoneResponse => {
-                    return Ok(());
-                },
+                MessageType::ListEntitiesDoneResponse => break,
                 _ => self.save_entity(msg_type, msg)?
             }
         }
+
+        for entity in self.entities.get_all() {
+            self.entity_key_to_name.insert(entity.key, entity.object_id.to_string());
+        }
+
+        Ok(())
     }
 }
 
 //TODO doc comments
-macro_rules! get_commands {
+macro_rules! make_commands {
     ($($command:ident),*) => { paste::paste! {
         impl ESPHomeDevice {
             $(
                 pub async fn [<$command:snake _command>](&mut self, req: &api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
-                    self.process_incoming().await?;
                     self.send(MessageType::[<$command CommandRequest>], req).await?;
                     Ok(())
                 }
@@ -263,7 +290,7 @@ macro_rules! get_commands {
     }}
 }
 
-get_commands! {
+make_commands! {
     Light, Cover, Fan, Switch, Climate,
     Number, Siren, Lock, Button, MediaPlayer,
     AlarmControlPanel, Text, Date, Time, DateTime,

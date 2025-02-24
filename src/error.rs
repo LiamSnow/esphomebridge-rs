@@ -1,5 +1,6 @@
 use thiserror::Error;
-use crate::model::{MessageType, UserServiceParseError};
+use tokio::sync::mpsc::error::SendError;
+use crate::{entity::EntityStateUpdate, model::{Log, MessageType, UserServiceParseError}};
 
 #[derive(Error, Debug)]
 pub enum DeviceError {
@@ -35,6 +36,10 @@ pub enum DeviceError {
     UnknownIncomingMessageType(MessageType),
     #[error("unknown log level `{0}`")]
     UnknownLogLevel(i32),
+    #[error("log send error `{0}`")]
+    LogChannelSendError(SendError<Log>),
+    #[error("entity state update send error `{0}`")]
+    EntityStateUpdateChannelSendError(SendError<EntityStateUpdate>),
 }
 
 impl From<ConnectionError> for DeviceError {
@@ -52,6 +57,18 @@ impl From<prost::DecodeError> for DeviceError {
 impl From<prost::EncodeError> for DeviceError {
     fn from(value: prost::EncodeError) -> Self {
         Self::ProstEncodeError(value)
+    }
+}
+
+impl From<SendError<Log>> for DeviceError {
+    fn from(value: SendError<Log>) -> Self {
+        Self::LogChannelSendError(value)
+    }
+}
+
+impl From<SendError<EntityStateUpdate>> for DeviceError {
+    fn from(value: SendError<EntityStateUpdate>) -> Self {
+        Self::EntityStateUpdateChannelSendError(value)
     }
 }
 
