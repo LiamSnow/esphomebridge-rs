@@ -1,6 +1,6 @@
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
-use crate::{entity::EntityStateUpdate, model::{Log, MessageType, UserServiceParseError}};
+use crate::{entity::{EntityStateUpdate, EntityType}, model::{Log, MessageType, UserServiceParseError}};
 
 #[derive(Error, Debug)]
 pub enum DeviceError {
@@ -24,8 +24,8 @@ pub enum DeviceError {
     ProstEncodeError(prost::EncodeError),
     #[error("user service parse error `{0}`")]
     UserServiceParseError(UserServiceParseError),
-    #[error("state update for unknown entity `{0}`")]
-    StateUpdateForUnknownEntity(u32),
+    #[error("state update for unknown entity (key=`{0}`, type=`{1}`)")]
+    StateUpdateForUnknownEntity(u32, EntityType),
     #[error("unknown list entities reponse `{0}`")]
     UnknownListEntitiesResponse(MessageType),
     #[error("unknown entity category `{0}`")]

@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityInfos, EntityStateUpdate}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
+    api, connection::{base::{AnyConnection, Connection}, noise::NoiseConnection, plain::PlainConnection}, entity::{EntityIndexLut, EntityInfos, EntityStateUpdate}, error::DeviceError, model::{Log, LogLevel, MessageType, UserService}
 };
 
 pub struct ESPHomeDevice {
@@ -14,7 +14,7 @@ pub struct ESPHomeDevice {
     password: String,
     pub connected: bool,
     pub entities: EntityInfos, // Ex. lights.rgbct_bulb -> EntityInfo
-    pub entity_key_to_name: HashMap<u32, String>,
+    pub entity_index_lut: EntityIndexLut,
     pub services: HashMap<u32, UserService>,
     log_tx: Option<Sender<Log>>,
     state_update_tx: Option<Sender<EntityStateUpdate>>,
@@ -34,7 +34,7 @@ impl ESPHomeDevice {
             password: password.unwrap_or("".to_string()),
             connected: false,
             entities: EntityInfos::default(),
-            entity_key_to_name: HashMap::new(),
+            entity_index_lut: EntityIndexLut::default(),
             services: HashMap::new(),
             log_tx: None,
             state_update_tx: None,
@@ -267,11 +267,6 @@ impl ESPHomeDevice {
                 _ => self.save_entity(msg_type, msg)?
             }
         }
-
-        for entity in self.entities.get_all() {
-            self.entity_key_to_name.insert(entity.key, entity.object_id.to_string());
-        }
-
         Ok(())
     }
 }
@@ -283,6 +278,15 @@ macro_rules! make_commands {
             $(
                 pub async fn [<$command:snake _command>](&mut self, req: &api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
                     self.send(MessageType::[<$command CommandRequest>], req).await?;
+                    Ok(())
+                }
+
+                /// Send a command to all entities
+                pub async fn [<$command:snake _command_global>](&mut self, req: &mut api::[<$command CommandRequest>]) -> Result<(), DeviceError> {
+                    for key in self.get_primary_light_keys() {
+                        req.key = key;
+                        self.send(MessageType::[<$command CommandRequest>], req).await?;
+                    }
                     Ok(())
                 }
             )*

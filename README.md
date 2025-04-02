@@ -1,10 +1,13 @@
 # ESPHome Bridge
 
-This is a complete rewrite of aioesphomeapi. It works similarly to aioesphomeapi,
-but has a big emphasis on efficiency and async/await. The following features
-are not implemented:
+A client API to interact with ESPHome devices (in the same way Home Assistant does).
+
+The following features are **not** implemented:
  - Bluetooth
  - Voice Assistants
+
+[aioesphomeapi](github.com/esphome/aioesphomeapi) was used a reference, but this
+is not a one-to-one copy.
 
 ## Usage
 
