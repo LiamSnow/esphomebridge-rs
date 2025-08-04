@@ -40,15 +40,8 @@ for light in dev.entities.light {
 
 Turn on a light, given the entity name
 ```rust
-let index = dev
-    .entity_index_lut
-    .light_by_name
-    .get("rgbct_bulb")?;
-
-let key = dev.entities.light.get(*index)?.key;
-
 let req = api::LightCommandRequest {
-    key,
+    key: dev.get_light_key_from_name("rgbct_bulb")?,
     has_state: true,
     state: true
     ..Default::default()
@@ -56,3 +49,5 @@ let req = api::LightCommandRequest {
 
 dev.light_command(req).await?;
 ```
+
+See [liamsnow.com](https://liamsnow.com/projects/esphomebridge-rs) for more.

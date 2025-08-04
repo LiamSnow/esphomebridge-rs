@@ -1,12 +1,11 @@
 pub mod connection;
 pub mod device;
-pub mod model;
 pub mod entity;
 pub mod error;
+pub mod model;
 pub mod api {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -14,34 +13,41 @@ mod tests {
 
     use tokio::time::timeout;
 
+    use crate::api::ListEntitiesBinarySensorResponse;
     use crate::device::ESPHomeDevice;
+
+    use crate::entity::EntityInfos;
 
     #[tokio::test]
     async fn test() {
-        let mut dev = ESPHomeDevice::new_noise("192.168.1.18:6053".to_string(), "GwsvILrvcN/BHAG9m7Hgzcqzc4Dx9neT/1RfEDmsecw=".to_string());
+        let mut dev = ESPHomeDevice::new_noise(
+            "192.168.1.18:6053".to_string(),
+            "GwsvILrvcN/BHAG9m7Hgzcqzc4Dx9neT/1RfEDmsecw=".to_string(),
+        );
         dev.connect().await.unwrap();
         println!("connected");
 
-        let mut rx = dev.subscribe_states(5).await.unwrap();
+        // dev.entities.light.get()
 
-        loop {
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(update)) => println!("{:#?}", update),
-                Ok(None) => {
-                    println!("Channel closed");
-                    break;
-                }
-                Err(_) => {
-                    dev.process_incoming().await.unwrap();
-                    continue;
-                }
-            }
-        }
+        // let mut rx = dev.subscribe_states(5).await.unwrap();
+
+        // loop {
+        //     match timeout(Duration::from_millis(100), rx.recv()).await {
+        //         Ok(Some(update)) => println!("{:#?}", update),
+        //         Ok(None) => {
+        //             println!("Channel closed");
+        //             break;
+        //         }
+        //         Err(_) => {
+        //             dev.process_incoming().await.unwrap();
+        //             continue;
+        //         }
+        //     }
+        // }
 
         // let a = dev.entities.light.get("rgbct_bulb").unwrap();
         //
         // println!("{:#?}", a);
-
 
         // let key = dev.entities.light.get("rgbct_bulb").unwrap().key;
 
